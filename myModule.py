@@ -230,7 +230,7 @@ class TotalLoss(nn.Module):
 class SelfGuidedContraModel(nn.Module):
     def __init__(self, model_name, total_loss, hidden):
         super.__init__()
-        self.bertF = AutoModel.from_pretrained(model_name)
+        self.bertF = AutoModel.from_pretrained(model_name, output_hidden_states=True)
         self.bertT = AutoModel.from_pretrained(model_name)
         self.proj = nn.Sequential(
             nn.Linear(hidden, 4096),
@@ -261,15 +261,17 @@ class SelfGuidedContraModel(nn.Module):
         ).pooler_output
         pooler_output = self.proj(pooler_output)
 
-        #[batch_size, layers, hidden_dim]
+        #tuple of [batch, seqlen, hidden]
         hiddens = self.bertF(
             input_ids=input_ids,
             attention_mask=attention_mask,
             token_type_ids=token_type_ids
         ).hidden_states
 
+        #apply mean pooling on seqlen dimension [layer, batch, seqlen, hidden] -> [batch, layer, hidden]
         hiddens = torch.stack(hiddens, dim=0).mean(-2).transpose(0, 1)
         hiddens = self.proj(hiddens)
+
 
         if isinstance(self.loss_fn.regloss, RegLoss):
             return self.loss_fn(
@@ -280,6 +282,8 @@ class SelfGuidedContraModel(nn.Module):
             )
 
         elif isinstance(self.loss_fn.regloss, RegHiddenLoss):
+            #It is not stated in this paper whether regularization term is relative to model parameter or hidden state
+            #I guess it is relative to model parameter, So I didn't implement this method
             raise NotImplementedError()
 
 

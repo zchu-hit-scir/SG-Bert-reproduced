@@ -15,6 +15,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn, utils, optim
 import os
+import numpy as np
 from os import path as osp
 from myModule import (
     UniformSampler,
@@ -72,6 +73,9 @@ else:
 totalloss = TotalLoss(sgloss, sampler, regloss, lamb)
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 
+
+pearsonr_list_all, spearmanr_list_all = [], []
+test_pearsonr_over_seed, test_spearmanr_over_seed = [], []
 for seed in args.seed:
     set_seed(seed)
     model = SelfGuidedContraModel(model_name, totalloss, hidden_size)
@@ -193,7 +197,12 @@ for seed in args.seed:
                 groundtruth.extend(label)
         corr_pearson = pearsonr(predict, groundtruth)[1]
         corr_spearman = spearmanr(predict, groundtruth).correlation   
-    
+        test_pearsonr_over_seed.append(corr_pearson)
+        test_spearmanr_over_seed.append(corr_spearman)
+
+print(f'average spearmanr over {len(args.seed)} seed : {round(np.mean(test_spearmanr_over_seed) * 100, 2)}')
+print(f'average pearsonr over {len(args.seed)} seed : {round(np.mean(test_pearsonr_over_seed) * 100, 2)}')
+
 # def parse_args():
 #     parser = argparse.ArgumentParser()
 #     parser.add_argument('--save_path', type=str)

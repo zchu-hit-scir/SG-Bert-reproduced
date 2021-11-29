@@ -83,17 +83,18 @@ def write_csv(data, location):
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--save_path', type=str)
-    parser.add_argument('--train_file', type=str, choices=['combine', 'train'], default='combine')
-    parser.add_argument('--loss', type=str, choices=['opt2', 'opt3', 'opt3s'])
-    parser.add_argument('--regloss', type=str, choices=['param', 'hidden'], default='param')
+    parser.add_argument('--save_path', type=str, help='best corr_spearman on dev set, pytorch_model checkpoint')
+    parser.add_argument('--train_file', type=str, choices=['combine', 'train'], default='combine', help='choose the datasets the model trains on')
+    parser.add_argument('--loss', type=str, choices=['opt2', 'opt3', 'opt3s'], help='self-guided contrastive loss func')
+    parser.add_argument('--regloss', type=str, choices=['param', 'hidden'], default='param', help='regularization term')
     parser.add_argument('--lamb', type=float, default=0.1, help='weight of regularization term')
     parser.add_argument('--temp', type=float, help='cosine similarity scaling factor ')
     parser.add_argument('--sampler', type=str, choices=['uniform', 'weighted'], default=None)
     parser.add_argument('--sample_weight', type=float, nargs='*')
-    parser.add_argument('--do_train', action='store_true', default=False)
-    parser.add_argument('--do_dev', action='store_true', default=False)
-    parser.add_argument('--do_test', action='store_true', default=False)
+    parser.add_argument('--do_train', action='store_true', default=False, help='whether to train model')
+    parser.add_argument('--do_dev', action='store_true', default=False, help='whether to evaluate model after each training epoch on dev set')
+    parser.add_argument('--do_test', action='store_true', default=False, help='whether to evaluate model after whole training was done, loading the checkpoint \
+        which has best dev-set performance')
     parser.add_argument('--lr', type=float)
     parser.add_argument('--batch_size', type=int)
     parser.add_argument('--epoch_num', type=int)
@@ -107,7 +108,7 @@ def parse_args():
 
 def load_sentence_pair(file_path):
     """
-    load sentence pair from file
+    load sentence pair
     return list of [sent1, sent2]
     """
     datas = []
@@ -153,12 +154,14 @@ def infer_hidden_size(model_name):
     infer hidden_size and layers_num from model_name or model checkpoint
     return hiddensize, layernum
     """
-    # if 'base' in model_name:
-    #     return 768, 12
-    # elif 'large' in model_name:
-    #     return 1024, 24
-    
     import json
+
+    if not osp.exists(osp.join(model_name, 'config.json')):
+        if 'base' in model_name:
+            return 768, 12
+        elif 'large' in model_name:
+            return 1024, 24
+
     with open(osp.join(model_name, 'config.json'), 'r') as f:
         cfg = json.load(f)
         hidden = cfg['hidden_size']
@@ -166,6 +169,9 @@ def infer_hidden_size(model_name):
     return hidden, layer
 
 def warmup_cosine_decay(optimizer, current_step, max_step, lr_min, lr_max, warmup=0.1):
+    """
+    first linearn warmup and then cosine learning rate decay
+    """
     from math import cos, pi
     warmup_step = int(max_step * warmup)
     if current_step < warmup_step:
