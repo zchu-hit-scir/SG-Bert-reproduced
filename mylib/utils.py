@@ -2,12 +2,12 @@ import torch
 import random
 import numpy as np
 import os
-from os import X_OK, path as osp
+from os import path as osp
 import csv 
 import argparse
-
-from torch.optim import optimizer
-
+import matplotlib
+matplotlib.use('Agg')
+from matplotlib import pyplot as plt
 class StepCounter:
     def __init__(self, max_step, cur_step=0):
         self.max_step = max_step
@@ -96,12 +96,15 @@ def parse_args():
     parser.add_argument('--do_test', action='store_true', default=False, help='whether to evaluate model after whole training was done, loading the checkpoint \
         which has best dev-set performance')
     parser.add_argument('--lr', type=float)
+    parser.add_argument('--betas', type=float, nargs='+', default=[0.9, 0.9])
     parser.add_argument('--batch_size', type=int)
     parser.add_argument('--epoch_num', type=int)
     parser.add_argument('--max_sent_len', type=int, default=128)
     parser.add_argument('--seed', type=int, nargs='+')
     parser.add_argument('--model_name', type=str)
     parser.add_argument('--warmup', type=float, default=0.1)
+    #parser.add_argument('--eval_metrics', type=str, default='spearman', choices=['pearson', 'spearman'], help='using which metric to save best model')
+
     global args
     args = parser.parse_args()
     return args
@@ -190,6 +193,42 @@ def move_to_device(input:dict, device):
     return {
         key : value.to(device) for key, value in input.items()
     }
+
+def my_plot(losses=None, pearson_corr=None, spearman_corr=None):
+    """
+    a plot with three sub plot, which is loss, pearsonr, spearmanr, respectively
+    """
+    subplotcnt = 0
+    plt.figure(figsize=(21.3, 4))
+    if losses is not None:
+        subplotcnt += 1
+        plt.subplot(1,3,subplotcnt)
+        for loss in losses:
+            x = np.array(list(range(len(loss)))) / (len(loss) / args.epoch_num)
+            plt.plot(x, loss)
+        plt.xlabel('epoch_num')
+        plt.ylabel('train loss')
+
+    if pearson_corr is not None:
+        subplotcnt += 1
+        plt.subplot(1,3,subplotcnt)
+        for p in pearson_corr:
+            x = list(range(1, len(p) + 1))
+            plt.plot(x, p)
+        plt.xlabel('epoch_num')
+        plt.ylabel('pearson corr')
+
+    if spearman_corr is not None:
+        subplotcnt += 1
+        plt.subplot(1,3,subplotcnt)
+        for sp in spearman_corr:
+            x = list(range(1, len(sp) + 1))
+            plt.plot(x, sp)
+        plt.xlabel('epoch_num')
+        plt.ylabel('spearman corr')
+    
+    plt.savefig(osp.join(args.save_path, 'curve.png'), dpi=300)
+    plt.close('all')
 # print(load_sentence_pair('datasets\Stsbenchmark\sts-dev.csv')[:5])
 # print(load_sentence_pair('datasets\Stsbenchmark\sts-dev.csv')[-5:])
 from torch.utils.data import DataLoader

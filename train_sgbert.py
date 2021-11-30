@@ -15,6 +15,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn, utils, optim
 import os
+import json
 import numpy as np
 from os import path as osp
 from myModule import (
@@ -52,6 +53,8 @@ TRAIN_FILE = {
     'combine' : 'datasets\Stsbenchmark\sts-all.csv'
 }
 
+SEPARATOR = '==============================\n'
+
 args = parse_args()
 
 device = get_device()
@@ -73,8 +76,9 @@ else:
 totalloss = TotalLoss(sgloss, sampler, regloss, lamb)
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 
-
-pearsonr_list_all, spearmanr_list_all = [], []
+#xxx_list_dev_all: Record metrics on dev set, every seed, every epoch
+pearsonr_list_dev_all, spearmanr_list_dev_all = [], []
+#test_xxx_over_seed: Record metrics on test set for each seed, load the best performed model checkpoint on dev set.
 test_pearsonr_over_seed, test_spearmanr_over_seed = [], []
 for seed in args.seed:
     set_seed(seed)
@@ -109,7 +113,8 @@ for seed in args.seed:
         warmup=args.warmup
     )
 
-    pearsonr_list, spearmanr_list = [], []
+    #pearsonr_list_dev, spearmanr_list_dev: Record evaluation metrics for development sets in each epoch.
+    pearsonr_list_dev, spearmanr_list_dev = [], []
     best_spearmanr = -1
     for epoch in range(args.epoch_num):
         model.train()
@@ -161,9 +166,15 @@ for seed in args.seed:
                     groundtruth.extend(label)      
             corr_pearson = pearsonr(predict, groundtruth)[1]
             corr_spearman = spearmanr(predict, groundtruth).correlation 
+            pearsonr_list_dev.append(corr_pearson)
+            spearmanr_list_dev.append(corr_spearman)
+
             if corr_spearman > best_spearmanr:
                 best_spearmanr = corr_spearman
                 torch.save(bertT.state_dict(), osp.join(args.save_path, 'pytorch_model.bin'))
+
+    pearsonr_list_dev_all.append(pearsonr_list_dev)
+    spearmanr_list_dev_all.append(spearmanr_list_dev_all)
 
     if args.do_test:
         model.bertT.load_state_dict(torch.load(osp.join(args.save_path, 'pytorch_model.bin')))
@@ -202,6 +213,28 @@ for seed in args.seed:
 
 print(f'average spearmanr over {len(args.seed)} seed : {round(np.mean(test_spearmanr_over_seed) * 100, 2)}')
 print(f'average pearsonr over {len(args.seed)} seed : {round(np.mean(test_pearsonr_over_seed) * 100, 2)}')
+
+#save evaluate result into file
+with open(osp.join(args.save_path, 'result.txt'), 'w', encoding='utf-8') as f:
+    kwargs = vars(args)
+    f.write(json.dumps(kwargs) + '\n')
+    f.write(f'{SEPARATOR}Pearson correlation: \n')
+    for row_index, seed in enumerate(args.seed):
+        f.write(
+            f"seed[{seed}]: {','.join([str(round(x * 100)) for x in pearsonr_list_dev_all[row_index]])} \n"
+        )
+    f.write(f"test: {','.join([str(round(x * 100)) for x in test_pearsonr_over_seed])} \n")
+    f.write(f"avg test pearsonr: {round(np.mean(test_pearsonr_over_seed) * 100)} \n")
+    f.write(f'{SEPARATOR}Spearman correlation: \n')
+    for row_index, seed in enumerate(args.seed):
+        f.write(
+            f"seed[{seed}]: {','.join([str(round(x * 100)) for x in spearmanr_list_dev_all[row_index]])} \n"
+        )
+    f.write(f"test: {','.join([str(round(x * 100)) for x in test_spearmanr_over_seed])} \n")
+    f.write(f"avg test spearmanr: {round(np.mean(test_spearmanr_over_seed) * 100)} \n")
+    
+
+    
 
 # def parse_args():
 #     parser = argparse.ArgumentParser()
