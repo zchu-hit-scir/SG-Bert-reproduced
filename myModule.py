@@ -133,8 +133,8 @@ class SGLossOpt3(nn.Module):
 class SGLossOpt3Simplified(nn.Module):
     """
     Simplified Opt3 loss(SG-opt loss) in "Self-Guided Contrastive Learning for BERT Sentence Representations"
-    In fact, since I couldn't write the loss function in the paper, I simplified it
-    in this optimize objectives, Sampler is not used
+    simplified the denominator, not reconmended.
+    SGLossOpt3 and SGLossOpt2 is recommended 
     """
     def __init__(self, temp):
         super().__init__()
@@ -184,6 +184,10 @@ class SGLossOpt3Simplified(nn.Module):
         return loss1 + loss2
 
 class RegHiddenLoss(nn.Module):
+    """
+    Impose L2-norm between the hidden_states of the two models as punishment
+    not implemented.
+    """
     def __init__(self):
         super().__init__()
     
@@ -198,6 +202,10 @@ class RegHiddenLoss(nn.Module):
         return torch.sum(torch.stack(param_list)).sqrt()
 
 class RegLoss(nn.Module):
+    """
+    Impose L2-norm between the parameters of encoder part of the two models as punishment
+    recommended.
+    """
     def __init__(self):
         super().__init__()
         self.epsilon = 1e-8
@@ -216,6 +224,9 @@ class RegLoss(nn.Module):
         
 
 class TotalLoss(nn.Module):
+    """
+    merge (self-guided contrastive loss), (layer sampler), and (regularization loss)
+    """
     def __init__(self, sgloss, sampler, regloss, lamb=0.1):
         super().__init__()
         self.sgloss = sgloss
@@ -250,6 +261,9 @@ class SelfGuidedContraModel(nn.Module):
 
 
     def _freeze_param(self):
+        """
+        freeze the embedding layers
+        """
         for name, param in self.bertT.named_parameters():
             if  'embeddings' in name:
                 param.requires_grad_(False)
