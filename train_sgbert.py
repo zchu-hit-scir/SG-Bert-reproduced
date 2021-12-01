@@ -8,7 +8,8 @@ from mylib.utils import (
     load_sentence_pair, load_single_sentence, load_eval_datas,    
     infer_hidden_size,
     get_device,
-    warmup_cosine_decay
+    warmup_cosine_decay,
+    makedirs
 )
 from transformers import AutoModel, AutoTokenizer
 import torch
@@ -49,8 +50,8 @@ REGLOSS_CLASS = {
 }
 
 TRAIN_FILE = {
-    'train' : 'datasets\Stsbenchmark\sts-train.csv',
-    'combine' : 'datasets\Stsbenchmark\sts-all.csv'
+    'train' : 'datasets/Stsbenchmark/sts-train.csv',
+    'combine' : 'datasets/Stsbenchmark/sts-all.csv'
 }
 
 SEPARATOR = '==============================\n'
@@ -58,6 +59,7 @@ SEPARATOR = '==============================\n'
 args = parse_args()
 
 device = get_device()
+makedirs(args.save_path)
 temp = args.temp
 lamb = args.lamb
 model_name = args.model_name
@@ -71,7 +73,7 @@ if args.sampler == 'weighted':
     sample_weight_tensor = torch.FloatTensor(args.sample_weight)
     sampler = SAMPLER_CLASS['weighted'](sample_weight_tensor)
 else:
-    sampler = SAMPLER_CLASS['uniform']
+    sampler = SAMPLER_CLASS['uniform']()
 
 totalloss = TotalLoss(sgloss, sampler, regloss, lamb)
 tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -83,6 +85,7 @@ test_pearsonr_over_seed, test_spearmanr_over_seed = [], []
 for seed in args.seed:
     set_seed(seed)
     model = SelfGuidedContraModel(model_name, totalloss, hidden_size)
+    model = model.to(device)
     train_loader = DataLoader(
         load_single_sentence(TRAIN_FILE[args.train_file]), batch_size=args.batch_size, shuffle=True
     )
@@ -101,8 +104,13 @@ for seed in args.seed:
             batch_size=args.batch_size, shuffle=False        
         )
 
-
-    optimizer = optim.AdamW(model.parameters(), lr=args.lr, betas=(0.9, 0.9))
+    param_group = [
+        {'params' : model.bertT.encoder.parameters()},
+        {'params' : model.proj.parameters()}
+    ]
+    optimizer = optim.AdamW(param_group, lr=args.lr, betas=args.betas)
+    #optimizer = optim.AdamW(filter(lambda p:p.requires_grad, model.parameters()), lr=args.lr, betas=args.betas)
+    #optimizer = optim.AdamW(model.parameters(), lr=args.lr, betas=(0.9, 0.9))
     step_counter = StepCounter(max_step=args.epoch_num * len(train_loader), cur_step=0)
     lr_sche = MyLRScheduler(
         sc=step_counter,
@@ -119,6 +127,7 @@ for seed in args.seed:
     for epoch in range(args.epoch_num):
         model.train()
         for batch_id, X in enumerate(train_loader):
+            optimizer.zero_grad()
             lr_sche.step()
             X = tokenizer(
                 list(X),
@@ -158,13 +167,13 @@ for seed in args.seed:
                             return_tensors='pt'
                         ),
                         device=device)
-                    label = label.cpu().numpy().tolist()
-                    cls1, cls2 = bertT(**sent1).pooler_output, bertT(**sent2).pooler_output
+                    
+                    cls1, cls2 = bertT(**sent1).last_hidden_state[:,0,:], bertT(**sent2).last_hidden_state[:,0,:]
                     cosine_similarities = F.cosine_similarity(cls1, cls2, dim=-1).cpu().numpy().tolist()     
-
+                    label = [float(_) for _ in label]
                     predict.extend(cosine_similarities)
                     groundtruth.extend(label)      
-            corr_pearson = pearsonr(predict, groundtruth)[1]
+            corr_pearson = pearsonr(predict, groundtruth)[0]
             corr_spearman = spearmanr(predict, groundtruth).correlation 
             pearsonr_list_dev.append(corr_pearson)
             spearmanr_list_dev.append(corr_spearman)
@@ -174,7 +183,7 @@ for seed in args.seed:
                 torch.save(bertT.state_dict(), osp.join(args.save_path, 'pytorch_model.bin'))
 
     pearsonr_list_dev_all.append(pearsonr_list_dev)
-    spearmanr_list_dev_all.append(spearmanr_list_dev_all)
+    spearmanr_list_dev_all.append(spearmanr_list_dev)
 
     if args.do_test:
         model.bertT.load_state_dict(torch.load(osp.join(args.save_path, 'pytorch_model.bin')))
@@ -201,37 +210,38 @@ for seed in args.seed:
                         return_tensors='pt'
                     ),
                     device=device)
-                label = label.cpu().numpy().tolist()
-                cls1, cls2 = bertT(**sent1).pooler_output, bertT(**sent2).pooler_output
+                label = [float(_) for _ in label]
+                cls1, cls2 = bertT(**sent1).last_hidden_state[:,0,:], bertT(**sent2).last_hidden_state[:,0,:]
                 cosine_similarities = F.cosine_similarity(cls1, cls2, dim=-1).cpu().numpy().tolist()  
                 predict.extend(cosine_similarities)
                 groundtruth.extend(label)
-        corr_pearson = pearsonr(predict, groundtruth)[1]
+        corr_pearson = pearsonr(predict, groundtruth)[0]
         corr_spearman = spearmanr(predict, groundtruth).correlation   
         test_pearsonr_over_seed.append(corr_pearson)
         test_spearmanr_over_seed.append(corr_spearman)
 
-print(f'average spearmanr over {len(args.seed)} seed : {round(np.mean(test_spearmanr_over_seed) * 100, 2)}')
-print(f'average pearsonr over {len(args.seed)} seed : {round(np.mean(test_pearsonr_over_seed) * 100, 2)}')
+print(f'average spearmanr over {len(args.seed)} seed : {np.mean(test_spearmanr_over_seed) * 100}')
+print(f'average pearsonr over {len(args.seed)} seed : {np.mean(test_pearsonr_over_seed) * 100}')
 
 #save evaluate result into file
+with open(osp.join(args.save_path, 'mycfg.json'), 'w', encoding='utf-8') as f:
+    f.write(json.dumps(vars(args)))
+
 with open(osp.join(args.save_path, 'result.txt'), 'w', encoding='utf-8') as f:
-    kwargs = vars(args)
-    f.write(json.dumps(kwargs) + '\n')
-    f.write(f'{SEPARATOR}Pearson correlation: \n')
+
     for row_index, seed in enumerate(args.seed):
         f.write(
-            f"seed[{seed}]: {','.join([str(round(x * 100)) for x in pearsonr_list_dev_all[row_index]])} \n"
+            f"seed[{seed}]: {','.join([str(round(x * 100, 2)) for x in pearsonr_list_dev_all[row_index]])} \n"
         )
-    f.write(f"test: {','.join([str(round(x * 100)) for x in test_pearsonr_over_seed])} \n")
-    f.write(f"avg test pearsonr: {round(np.mean(test_pearsonr_over_seed) * 100)} \n")
+    f.write(f"test: {','.join([str(round(x * 100, 2)) for x in test_pearsonr_over_seed])} \n")
+    f.write(f"avg test pearsonr: {round(np.mean(test_pearsonr_over_seed) * 100, 2)} \n")
     f.write(f'{SEPARATOR}Spearman correlation: \n')
     for row_index, seed in enumerate(args.seed):
         f.write(
-            f"seed[{seed}]: {','.join([str(round(x * 100)) for x in spearmanr_list_dev_all[row_index]])} \n"
+            f"seed[{seed}]: {','.join([str(round(x * 100, 2)) for x in spearmanr_list_dev_all[row_index]])} \n"
         )
-    f.write(f"test: {','.join([str(round(x * 100)) for x in test_spearmanr_over_seed])} \n")
-    f.write(f"avg test spearmanr: {round(np.mean(test_spearmanr_over_seed) * 100)} \n")
+    f.write(f"test: {','.join([str(round(x * 100, 2)) for x in test_spearmanr_over_seed])} \n")
+    f.write(f"avg test spearmanr: {round(np.mean(test_spearmanr_over_seed) * 100, 2)} \n")
     
 
     

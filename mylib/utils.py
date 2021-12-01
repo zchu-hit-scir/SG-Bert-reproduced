@@ -231,14 +231,14 @@ def my_plot(losses=None, pearson_corr=None, spearman_corr=None):
     plt.close('all')
 # print(load_sentence_pair('datasets\Stsbenchmark\sts-dev.csv')[:5])
 # print(load_sentence_pair('datasets\Stsbenchmark\sts-dev.csv')[-5:])
-from torch.utils.data import DataLoader
-test_loader = DataLoader(
-    load_eval_datas('datasets\Stsbenchmark\sts-test.csv'),
-    batch_size=2, shuffle=False        
-)
-for X in test_loader:
-    print(X)
-    break
+# from torch.utils.data import DataLoader
+# test_loader = DataLoader(
+#     load_eval_datas('datasets\Stsbenchmark\sts-test.csv'),
+#     batch_size=2, shuffle=False        
+# )
+# for X in test_loader:
+#     print(X)
+#     break
 # train_datas = load_sentence_pair('datasets\Stsbenchmark\sts-test.csv')
 # train_loader = DataLoader(
 #     train_datas, batch_size=2, shuffle=True

@@ -12,12 +12,14 @@ from torch.utils.data import DataLoader
 from torch.nn import functional as F
 import os
 from os import path as osp
-
+from mylib.utils import (
+    get_device
+)
 """
 Self-Guided Contrastive Learning for BERT Sentence Representations
 https://arxiv.org/abs/2106.07345
 """
-
+device = get_device()
 class UniformSampler(nn.Module):
     """
     Uniformly sample the hidden states of each layer, in other words, average the hidden states of all layers
@@ -80,7 +82,7 @@ class SGLossOpt2(nn.Module):
         sim = F.cosine_similarity(cls.unsqueeze(1), hidden.unsqueeze(0), dim=-1) / self.temp
         label = torch.arange(sim.shape[0]).long().to(sim.device)
 
-        return F.cross_entropy(sim, label), sim
+        return F.cross_entropy(sim, label)
 
 class SGLossOpt3(nn.Module):
     """
@@ -105,15 +107,15 @@ class SGLossOpt3(nn.Module):
 
         #sim_ci_hik [batch_size, layers]
         #sim_ci_hmn [batch_size, batch_size, layers]
-        sim_ci_hik = torch.exp(F.cosine_similarity(cls.unsqueeze(1), hidden, dim=-1)) / self.temp
+        sim_ci_hik = torch.exp(F.cosine_similarity(cls.unsqueeze(1), hidden, dim=-1) / self.temp) 
         sim_ci_hmn = torch.exp(torch.stack([
-            F.cosine_similarity(c_i, hidden, -1) for c_i in cls
-        ], dim=0)) / self.temp
+            F.cosine_similarity(c_i, hidden, -1) / self.temp for c_i in cls
+        ], dim=0)) 
 
 
         #hmn_mask [batch, batch*layers] 
         #sim_ci_hmn reshape [batch, batch*layers]
-        hmn_mask = (torch.ones(batch_size, batch_size) - torch.eye(batch_size)).repeat(1, layer_num)
+        hmn_mask = (torch.ones(batch_size, batch_size) - torch.eye(batch_size)).repeat(1, layer_num).to(device)
         sim_ci_hmn = sim_ci_hmn.reshape(batch_size, batch_size * layer_num)
         
         sim_after_mask = sim_ci_hmn * hmn_mask
@@ -155,14 +157,14 @@ class SGLossOpt3Simplified(nn.Module):
         #step1 计算损失函数的分子
         #sim_ci_hik [batch_size, layers], 
         #sim_ci_hik[i] 代表第i个句子中，c_i和h_i0 ~ h_il的相似度
-        sim_ci_hik = torch.exp(F.cosine_similarity(cls.unsqueeze(1), hidden, dim=-1)) / self.temp
+        sim_ci_hik = torch.exp(F.cosine_similarity(cls.unsqueeze(1), hidden, dim=-1) / self.temp) 
 
         #step2 计算损失的分母
         #sim_ci_hmn [batch_size, batch_size, layers]
         #sim_ci_hmn[i] 代表第i个句子和其他所有句子所有层的相似度矩阵
         sim_ci_hmn = torch.exp(torch.stack([
-            F.cosine_similarity(c_i, hidden, -1) for c_i in cls
-        ], dim=0)) / self.temp
+            F.cosine_similarity(c_i, hidden, -1) / self.temp for c_i in cls
+        ], dim=0)) 
 
         #log(a) + log(b) = log(a*b)
         #对分子而言， sum over batch and layers： sim_ci_hik所有元素相乘
@@ -198,7 +200,8 @@ class RegHiddenLoss(nn.Module):
 class RegLoss(nn.Module):
     def __init__(self):
         super().__init__()
-    
+        self.epsilon = 1e-8
+
     def forward(self, param1, param2):
         #input: model.encoder.parameters()
         #output: loss
@@ -206,15 +209,19 @@ class RegLoss(nn.Module):
         for part1, part2 in zip(param1, param2):
             param = (part1 - part2).reshape(-1).pow(2).sum()
             param_list.append(param)
+
+        #derivatives of sqrt(x) is 1/2 * (1 / sqrt(x)), if x == 0, the denominator of the derivative will become 0, resulting in nan
+        return torch.sqrt(sum(param_list) + self.epsilon)
+        return sum(param_list).sqrt()
         
-        return torch.sum(torch.stack(param_list)).sqrt()
 
 class TotalLoss(nn.Module):
     def __init__(self, sgloss, sampler, regloss, lamb=0.1):
+        super().__init__()
         self.sgloss = sgloss
         self.sampler = sampler
         self.regloss = regloss
-        self.lamb = 0.1
+        self.lamb = lamb
     
     def forward(self, cls, hiddens, p1, p2):
         """
@@ -229,7 +236,7 @@ class TotalLoss(nn.Module):
 
 class SelfGuidedContraModel(nn.Module):
     def __init__(self, model_name, total_loss, hidden):
-        super.__init__()
+        super().__init__()
         self.bertF = AutoModel.from_pretrained(model_name, output_hidden_states=True)
         self.bertT = AutoModel.from_pretrained(model_name)
         self.proj = nn.Sequential(
@@ -243,13 +250,18 @@ class SelfGuidedContraModel(nn.Module):
 
 
     def _freeze_param(self):
-        for name, param in self.bertT.encoder.named_parameters():
-            if 'layer.0' in name:
+        for name, param in self.bertT.named_parameters():
+            if  'embeddings' in name:
                 param.requires_grad_(False)
         
-        for name, param in self.bertF.encoder.named_parameters():
+        for name, param in self.bertF.named_parameters():
             param.requires_grad_(False)
 
+        for name, param in self.bertT.named_parameters():
+            print(f'bertT.{name}', param.requires_grad)
+        
+        for name, param in self.bertF.named_parameters():
+            print(f'bertF.{name}', param.requires_grad)
 
     def forward(self, input_ids, attention_mask, token_type_ids=None, labels=None, inputs_embeds=None):
        
@@ -258,7 +270,7 @@ class SelfGuidedContraModel(nn.Module):
             input_ids=input_ids,
             attention_mask=attention_mask,
             token_type_ids=token_type_ids
-        ).pooler_output
+        ).last_hidden_state[:,0,:]
         pooler_output = self.proj(pooler_output)
 
         #tuple of [batch, seqlen, hidden]
@@ -277,8 +289,8 @@ class SelfGuidedContraModel(nn.Module):
             return self.loss_fn(
                 pooler_output,
                 hiddens,
-                self.BertF.parameters(),
-                self.BertT.parameters()
+                self.bertF.encoder.parameters(),
+                self.bertT.encoder.parameters()
             )
 
         elif isinstance(self.loss_fn.regloss, RegHiddenLoss):
