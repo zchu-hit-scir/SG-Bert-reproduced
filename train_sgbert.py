@@ -9,7 +9,8 @@ from mylib.utils import (
     infer_hidden_size,
     get_device,
     warmup_cosine_decay,
-    makedirs
+    makedirs,
+    my_plot
 )
 from transformers import AutoModel, AutoTokenizer
 import torch
@@ -82,6 +83,8 @@ tokenizer = AutoTokenizer.from_pretrained(model_name)
 pearsonr_list_dev_all, spearmanr_list_dev_all = [], []
 #test_xxx_over_seed: Record metrics on test set for each seed, load the best performed model checkpoint on dev set.
 test_pearsonr_over_seed, test_spearmanr_over_seed = [], []
+#loss_over_seed: Record loss during traning periods
+loss_over_seed = []
 for seed in args.seed:
     set_seed(seed)
     model = SelfGuidedContraModel(model_name, totalloss, hidden_size)
@@ -123,6 +126,8 @@ for seed in args.seed:
 
     #pearsonr_list_dev, spearmanr_list_dev: Record evaluation metrics for development sets in each epoch.
     pearsonr_list_dev, spearmanr_list_dev = [], []
+    loss_several_batch = []
+    loss_per_seed = []
     best_spearmanr = -1
     for epoch in range(args.epoch_num):
         model.train()
@@ -141,7 +146,10 @@ for seed in args.seed:
             loss.backward()
             optimizer.step()
             loss_val = loss.item()
-        
+            loss_several_batch.append(loss_val)
+            if batch_id % 5 == 0:
+                loss_per_seed.append(np.mean(loss_several_batch))
+                loss_several_batch = []
         if args.do_dev:
             model.eval()
             bertT = model.bertT
@@ -180,13 +188,13 @@ for seed in args.seed:
 
             if corr_spearman > best_spearmanr:
                 best_spearmanr = corr_spearman
-                torch.save(bertT.state_dict(), osp.join(args.save_path, 'pytorch_model.bin'))
+                torch.save(bertT.state_dict(), osp.join(args.save_path, f'pytorch_model_{seed}.bin'))
 
     pearsonr_list_dev_all.append(pearsonr_list_dev)
     spearmanr_list_dev_all.append(spearmanr_list_dev)
-
+    loss_over_seed.append(loss_per_seed)
     if args.do_test:
-        model.bertT.load_state_dict(torch.load(osp.join(args.save_path, 'pytorch_model.bin')))
+        model.bertT.load_state_dict(torch.load(osp.join(args.save_path, f'pytorch_model_{seed}.bin')))
         model.eval()
         bertT = model.bertT
         predict, groundtruth = [], []
@@ -219,6 +227,8 @@ for seed in args.seed:
         corr_spearman = spearmanr(predict, groundtruth).correlation   
         test_pearsonr_over_seed.append(corr_pearson)
         test_spearmanr_over_seed.append(corr_spearman)
+
+my_plot(losses=loss_over_seed, pearson_corr=pearsonr_list_dev_all, spearman_corr=spearmanr_list_dev_all)
 
 print(f'average spearmanr over {len(args.seed)} seed : {np.mean(test_spearmanr_over_seed) * 100}')
 print(f'average pearsonr over {len(args.seed)} seed : {np.mean(test_pearsonr_over_seed) * 100}')
